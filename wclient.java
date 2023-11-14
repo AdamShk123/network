@@ -146,12 +146,18 @@ public class wclient {
         System.err.println("handoff received; new port is " + newport);
 
 	    // send ack[0] to new port
-        ack = null;		// what should it be? wumppkt.ACK(0);
+        ack = new wumppkt.ACK(0);		// what should it be? wumppkt.ACK(0);
         ackDG.setData(ack.write());
         ackDG.setLength(ack.size());
-	    ackDG.setPort(0);	// what port?
+	    ackDG.setPort(newport);	// what port?
 
 	    // now send ackDG, using s.send(), as above
+        try {
+            s.send(ackDG);
+        }
+        catch (IOException e) {
+            System.err.println(e);
+        }
 
         //====== MAIN LOOP ================================================
 	    // now you wait for each DATA[n], and send ACK[n] in reply
