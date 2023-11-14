@@ -171,8 +171,8 @@ public class wclient {
             catch (SocketTimeoutException ste) {
 				System.err.println("hard timeout");
 				// what do you do here??; retransmit of previous packet here
-				return;
-				//continue;
+				//return;
+				continue;
             }
             catch (IOException ioe) {
                 System.err.println("receive() failed");
@@ -199,7 +199,7 @@ public class wclient {
                     blocknum = data.blocknum();
             } else if ( proto == THEPROTO && opcode == wumppkt.ERRORop && length >= wumppkt.EHEADERSIZE) {
                 error = new wumppkt.ERROR(replybuf);
-                }
+            }
 
             printInfo(replyDG, data, starttime);
 
@@ -212,11 +212,21 @@ public class wclient {
                 System.err.println("Error packet rec'd; code " + error.errcode());
                     continue;
             }
-                if (data == null) continue;		// typical error check, but you should
+            if(proto != THEPROTO) {
+                System.err.println("protocol is incorrect!");
+            }
+            if(opcode != wumppkt.DATAop) {
+                System.err.println("opcode isn't data!");
+            }
+            if(srcport != newport) {
+                System.err.println("source port {" + srcport + "} and destination port {" + newport + "} aren't the same!");
+            }
+            if (data == null)
+                continue;		// typical error check, but you should
 
-                // The following is for you to do:
-                // check port, packet size, type, block, etc
-                // latch on to port, if block == 1
+            // The following is for you to do:
+            // check port, packet size, type, block, etc
+            // latch on to port, if block == 1
 
             // write data
             System.out.write(data.bytes(), 0, data.size() - wumppkt.DHEADERSIZE);
@@ -225,8 +235,9 @@ public class wclient {
             ack = new wumppkt.ACK(expected_block);
             ackDG.setData(ack.write());
             ackDG.setLength(ack.size());
-            //ackDG.setPort(??);
-            try {s.send(ackDG);}
+            ackDG.setPort(newport);
+            try {s.send(ackDG);
+                expected_block++;}
             catch (IOException ioe) {
                 System.err.println("send() failed");
                 return;
