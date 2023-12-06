@@ -12,12 +12,6 @@ import java.io.Externalizable;
 // If you update expected_block, you should receive the entire file, for "vanilla"
 // If you write the sanity checks, you should receive the entire file in all cases
 
-enum STATE {
-    UNLATCHED,
-    ESTABLISHED,
-    DALLY
-}
-
 public class wclient {
 
     //============================================================
@@ -28,7 +22,7 @@ public class wclient {
         int srcport;
         int destport = wumppkt.SERVERPORT;
 	    //destport = wumppkt.SAMEPORT;		// 4716; server responds from same port
-        String filename = "reorder";
+        String filename = "vanilla";
         String desthost = "ulam.cs.luc.edu";
         int winsize = 1;
 	    int latchport = 0;
@@ -117,7 +111,23 @@ public class wclient {
         catch (SocketTimeoutException ste) {
 		    System.err.println("hard timeout waiting for HANDOFF");
 		    // what do you do here??
-		    return;
+            try {s.send(reqDG);}
+            catch (IOException ioe) {
+                System.err.println("send() failed");
+                return;
+            }
+
+            try {
+                s.receive(replyDG);
+            }
+            catch (SocketTimeoutException stea) {
+                System.err.println("hard timeout waiting for HANDOFF");
+                return;
+            }
+            catch (IOException ioea) {
+                System.err.println("receive() failed");
+                return;
+            }
         }
         catch (IOException ioe) {
                 System.err.println("receive() failed");
@@ -169,8 +179,8 @@ public class wclient {
 	    // now you wait for each DATA[n], and send ACK[n] in reply
 	    // All DATA[n] must come from newport, above.
 
-        STATE state = STATE.UNLATCHED;
-        int dally_counter = 0;
+        boolean dally = false;
+        int timeout_counter = 0;
 
         while (true) {
             // get packet
@@ -180,11 +190,10 @@ public class wclient {
             catch (SocketTimeoutException ste) {
 				System.err.println("hard timeout");
 				// what do you do here??; retransmit of previous packet here
-                if(state == STATE.ESTABLISHED) {
+                if(!dally) {
                     long curr = System.currentTimeMillis();
                     if(curr - sendtime > 2000) {
                         System.err.println("Timeout over 2 seconds. Retransmitting ack...");
-                        sendtime = curr;
                         try {
                             s.send(ackDG);
                         }
@@ -192,19 +201,13 @@ public class wclient {
                             System.err.println("send() failed");
                             return;
                         }
+                        sendtime = curr;
                     }
-                    continue;
                 }
-                if(state == STATE.DALLY){
-                    dally_counter++;
-                    try {
-                        s.receive(replyDG);
-                    }
-                    catch (IOException e) {
-                        System.err.println("No ACK[N]...");
-                    }
+                else {
+                    timeout_counter++;
 
-                    if(dally_counter == 2) {
+                    if(timeout_counter == 3) {
                         System.err.println("DALLY over. Exiting...");
                         return;
                     }
@@ -240,16 +243,7 @@ public class wclient {
 
             printInfo(replyDG, data, starttime);
 
-            if(state == STATE.UNLATCHED) {
-                if(data.blocknum() == 1) {
-                    latchport = newport;
-                    System.err.println("DATA[1] received. Latching on to port");
-                    System.err.println("UNLATCHED -> ESTABLISHED");
-                    state = STATE.ESTABLISHED;
-                }
-            }
-
-            if(state == STATE.ESTABLISHED) {
+            if(!dally) {
                 // now check the packet for appropriateness
                 // if it passes all the checks:
                 //write data, increment expected_block
@@ -266,35 +260,58 @@ public class wclient {
                 // check port, packet size, type, block, etc
                 // latch on to port, if block == 1
 
-                if(srcport != newport) {
-                    System.err.println("source port {" + srcport + "} and destination port {" + newport + "} aren't the same!");
-                    continue;
+                if(data.blocknum() == 1 && latchport == 0) {
+                    latchport = newport;
+                    System.err.println("DATA[1] received. Latching on to port");
+                    System.err.println("UNLATCHED -> ESTABLISHED");
                 }
-                if(data.blocknum() != expected_block) {
-                    System.err.println("Blocks don't match");
-                    if(state == STATE.ESTABLISHED) {
-                        long curr = System.currentTimeMillis();
-                        if(curr - sendtime > 2000) {
-                            System.err.println("Timeout over 2 seconds. Retransmitting ack...");
-                            sendtime = curr;
-                            try {
-                                s.send(ackDG);
-                            }
-                            catch (IOException ioe) {
-                                System.err.println("send() failed");
-                                return;
-                            }
-                        }
-                        continue;
+
+                if(srcport != latchport) {
+                    System.err.println("source port {" + srcport + "} and destination port {" + latchport+ "} aren't the same!");
+                    System.err.println("sending error packet");
+                    error = new wumppkt.ERROR(wumppkt.EBADPORT);
+                    DatagramPacket errorDG = new DatagramPacket(error.write(), error.size());
+                    errorDG.setPort(latchport);
+                    errorDG.setAddress(dest);
+                    try {
+                        s.send(errorDG);
                     }
+                    catch (IOException e) {
+                        System.err.println("Failed to send error packet!");
+                    }
+                    sendtime = System.currentTimeMillis();
                     continue;
                 }
+
                 if(!replyDG.getAddress().getHostAddress().equals(dest.getHostAddress())) {
                     System.err.println("IP Addresses don't match! replyIP:" + replyDG.getAddress().getHostAddress() + " myIP: " + dest.getHostAddress());
                     continue;
                 }
+
+                if(proto != wumppkt.HUMPPROTO) {
+                    System.err.println("protocol is incorrect!");
+                    continue;
+                }
+
                 if(opcode != wumppkt.DATAop) {
                     System.err.println("opcode isn't data!");
+                    continue;
+                }
+
+                if(data.blocknum() != expected_block) {
+                    System.err.println("Blocks don't match");
+                    long curr = System.currentTimeMillis();
+                    if(curr - sendtime > 2000) {
+                        System.err.println("Timeout over 2 seconds. Retransmitting ack...");
+                        try {
+                            s.send(ackDG);
+                        }
+                        catch (IOException ioe) {
+                            System.err.println("send() failed");
+                            return;
+                        }
+                        sendtime = curr;
+                    }
                     continue;
                 }
 
@@ -305,15 +322,13 @@ public class wclient {
                 ack = new wumppkt.ACK(expected_block);
                 ackDG.setData(ack.write());
                 ackDG.setLength(ack.size());
-                ackDG.setPort(newport);
+                ackDG.setPort(latchport);
 
-                if(expected_block == data.blocknum()) {
-                    if(data.size() < 512) {
-                        System.err.println("Size of packet is smaller than 512 bytes. Exiting...");
-                        System.err.println("ESTABLISHED -> DALLY");
-                        state = STATE.DALLY;
-                        expected_block--;
-                    }
+                if(data.size() < 512) {
+                    System.err.println("Size of packet is smaller than 512 bytes. Exiting...");
+                    System.err.println("ESTABLISHED -> DALLY");
+                    expected_block--;
+                    dally = true;
                 }
 
                 try {
@@ -326,6 +341,16 @@ public class wclient {
                 }
 
                 sendtime = System.currentTimeMillis();
+            }
+            else {
+                try {
+                    System.err.println("received Data[" + expected_block + "]. sending final ACK[" + expected_block + "]");
+                    s.send(ackDG);
+                }
+                catch (IOException ioe) {
+                    System.err.println("send() failed");
+                    return;
+                }
             }
         } // while
     }
